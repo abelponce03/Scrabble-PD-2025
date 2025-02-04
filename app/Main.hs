@@ -57,6 +57,15 @@ tileValues = Map.fromList [
     ('Q', 10), ('R', 1), ('S', 1), ('T', 1), ('U', 1),
     ('V', 4), ('Z', 10)]
 
+-- Valores y distribución de fichas (simplificado)
+tileDistribution :: [(Char, Int)]
+tileDistribution = 
+    [ ('A', 9), ('B', 2), ('C', 2), ('D', 4), ('E', 12)
+    , ('F', 2), ('G', 3), ('H', 2), ('I', 9), ('J', 1)
+    , ('L', 4), ('M', 2), ('N', 6), ('O', 8), ('P', 2)
+    , ('Q', 1), ('R', 6), ('S', 4), ('T', 6), ('U', 4)
+    , ('V', 2), ('Z', 1) ]
+
 -- Configuración de multiplicadores del tablero
 initialMultipliers :: (Int, Int) -> (Int, Int)
 initialMultipliers pos = case pos of
@@ -89,11 +98,9 @@ initialMultipliers pos = case pos of
 
 -- Función para mezclar una lista
 shuffle :: [a] -> IO [a]
-shuffle [] = return []
 shuffle xs = do
-    i <- randomRIO (0, length xs - 1)
-    let (front, a:rest) = splitAt i xs
-    fmap (a :) (shuffle (front ++ rest))
+    randomPositions <- mapM (\_ -> randomRIO (0, length xs - 1)) xs
+    return $ map snd $ sortBy (comparing fst) $ zip randomPositions xs
 
 -- 2. Inicialización del juego con multiplicadores
 initializeGame :: IO GameState
@@ -101,30 +108,49 @@ initializeGame = do
     let boardDef = array ((0,0), (14,14)) 
                      [((i,j), Casilla Nothing (fst mult) (snd mult)) 
                       | i <- [0..14], j <- [0..14], let mult = initialMultipliers (i,j)]
-        initialTiles = Map.fromListWith (+) [(c, 1) | c <- "ABCDEFGHIJKLMNO"]
+        bag = concatMap (\(c, n) -> replicate n c) tileDistribution
+    shuffledBag <- shuffle bag
+    let (p1Tiles, remaining1) = splitAt 7 shuffledBag
+        (p2Tiles, remaining2) = splitAt 7 remaining1
+        initialTiles1 = Map.fromListWith (+) [(c, 1) | c <- p1Tiles]
+        initialTiles2 = Map.fromListWith (+) [(c, 1) | c <- p2Tiles]
         players = 
-            [ Player { name = "Bot1", score = 0, tiles = initialTiles, passLastTurn = False }
-            , Player { name = "Bot2", score = 0, tiles = initialTiles, passLastTurn = False }
+            [ Player { name = "Bot1", score = 0, tiles = initialTiles1, passLastTurn = False }
+            , Player { name = "Bot2", score = 0, tiles = initialTiles2, passLastTurn = False }
             ]
-        remaining2 = "PQRSTUVWXYZ"
     return $ GameState boardDef players remaining2 0
 
 --Visualización del tablero con multiplicadores
 printBoard :: Array (Int, Int) Casilla -> IO ()
 printBoard board = do
-    putStrLn ("\n   " ++ unwords [showCol i | i <- [0..14]])
+    -- Imprime la cabecera de columnas, cada una en un campo de 5 caracteres.
+    putStrLn ("\n    " ++ concat [showCol i | i <- [0..14]])
+    -- Imprime cada fila con su número (formateado a 2 caracteres) y las casillas
     mapM_ printRow [0..14]
-    where
-        showCol n = take 2 (show n ++ " ")
-        printRow y = do
-            let row = [board Data.Array.! (x, y) | x <- [0..14]]
-            putStr (show y ++ " ") >> putStrLn (concatMap showCasilla row)
-        
-        showCasilla Casilla{..} 
-            | isJust contenido = " " ++ [fromMaybe ' ' contenido] ++ " "
-            | multiplicadorPalabra > 1 = "TW"  -- Triple Word
-            | multiplicadorLetra > 1 = if multiplicadorLetra == 3 then "TL" else "DL"
-            | otherwise = "   "
+  where
+    -- Para números de columna: si es de un dígito se centra en un campo de 5 caracteres,
+    -- si tiene dos dígitos se ajusta también.
+    showCol :: Int -> String
+    showCol n
+      | n < 10    = "  " ++ show n ++ "  "
+      | otherwise = " "  ++ show n ++ "  "
+      
+    printRow :: Int -> IO ()
+    printRow y = do
+        let row = [ board Data.Array.! (x, y) | x <- [0..14] ]
+            rowStr = concatMap showCasilla row
+            rowLabel = if y < 10 then " " ++ show y else show y
+        putStrLn $ rowLabel ++ "  " ++ rowStr
+
+    -- Formatea cada casilla para que ocupe 5 caracteres.
+    -- Si hay letra se muestra centrada; si hay un multiplicador se imprime su código;
+    -- de lo contrario, se muestra un punto.
+    showCasilla :: Casilla -> String
+    showCasilla Casilla{..}
+      | isJust contenido = "  " ++ [fromMaybe ' ' contenido] ++ "  "
+      | multiplicadorPalabra > 1 = " TW  "
+      | multiplicadorLetra > 1   = if multiplicadorLetra == 3 then " TL  " else " DL  "
+      | otherwise = "  .  "
 
 --Validación mejorada de la primera jugada
 isValidFirstMove :: String -> [(Int, Int)] -> Bool
@@ -439,7 +465,7 @@ getLetter board pos = maybe ' ' id (contenido (board Data.Array.! pos))
 main :: IO ()
 main = do
     putStrLn "Cargando diccionario..."
-    dictContent <- readFile "dic/es.txt"
+    dictContent <- readFile "dic/diccionario_filtrado.txt"
     let dictionary = T.fromList [ (C8.pack (map toUpper w), True) 
                                   | w <- lines dictContent ]
     gameState <- initializeGame
