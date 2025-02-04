@@ -3,8 +3,8 @@
 module Main (main) where
 
 import System.Random (randomRIO, newStdGen)
-import Data.List (transpose, intersperse, find, sortBy, maximumBy)
-import Data.Char (toUpper)
+import Data.List (transpose, intersperse, find, sortBy, maximumBy, take)
+import Data.Char (toUpper, toLower)
 import Control.Monad (replicateM)
 import Data.Ord (comparing)
 import Text.Read (readMaybe)
@@ -96,6 +96,7 @@ insertTrie [] (Trie _ children) = Trie True children
 insertTrie (c:cs) (Trie end children) =
     Trie end (insertChild c cs children)
   where
+    insertChild :: Char -> String -> [(Char, Trie)] -> [(Char, Trie)]
     insertChild c cs [] = [(c, insertTrie cs emptyTrie)]
     insertChild c cs ((x, t):xs)
         | c == x    = (x, insertTrie cs t) : xs
@@ -116,14 +117,18 @@ loadDictionary path = do
     return $ foldr (insertTrie . map toUpper) emptyTrie wordsList
 
 -- Verificar si una jugada es válida (Optimizada)
-isValidMove :: Int -> Int -> Direction -> String -> [[Maybe Char]] -> Trie -> Bool -> Bool
-isValidMove x y dir word board dictionary isFirstMove = inBounds && noOverlap && wordExists && validStart
+isValidMove :: Int -> Int -> Direction -> String -> [[Maybe Char]] -> Trie -> Bool -> Either String Bool
+isValidMove x y dir word board dictionary isFirstMove
+    | not inBounds = Left "La palabra no cabe en el tablero."
+    | not noOverlap = Left "La palabra se superpone incorrectamente."
+    | not wordExists = Left $ "La palabra '" ++ word ++ "' no existe en el diccionario."
+    | not validStart = Left "La palabra no toca ninguna otra palabra."
+    | otherwise = Right True
   where
     inBounds = case dir of
         Horizontal -> x >= 0 && x + length word <= boardSize && y >= 0 && y < boardSize
         Vertical   -> y >= 0 && y + length word <= boardSize && x >= 0 && x < boardSize
 
-    -- Se optimiza la verificación de superposición
     noOverlap = all canPlace (zip positions word)
 
     positions = case dir of
@@ -145,8 +150,8 @@ handleMove :: Int -> Int -> Direction -> String -> GameState -> Trie -> Bool -> 
 handleMove x y dir word gameState@GameState{..} dictionary isFirstMove = do
     let current = players !! currentPlayer
     if all (`elem` tiles current) word
-        then if isValidMove x y dir word board dictionary isFirstMove
-            then do
+        then case isValidMove x y dir word board dictionary isFirstMove of
+            Right True -> do
                 let newBoard = placeWord x y dir word board
                     newTiles = removeTiles word (tiles current)
                     newScore = score current + sum (map tileValue word)
@@ -154,8 +159,8 @@ handleMove x y dir word gameState@GameState{..} dictionary isFirstMove = do
                     newPlayers = updateList currentPlayer updatedPlayer players
                     newGameState = gameState { board = newBoard, players = newPlayers }
                 advanceTurn newGameState dictionary False
-            else do
-                putStrLn "Movimiento inválido: la palabra no cabe en el tablero o se superpone incorrectamente"
+            Left errorMsg -> do
+                putStrLn $ "Movimiento inválido: " ++ errorMsg
                 gameLoop gameState dictionary isFirstMove
         else do
             putStrLn "No tienes esas fichas"
