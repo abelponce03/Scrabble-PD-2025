@@ -309,11 +309,12 @@ handleMove pos dir word gameState@GameState{..} dictionary = do
                     crossScores = sum [calculateWordScore start d w newBoard | (start,d,w) <- crossWords]
                     totalScore = mainWordScore + crossScores
                     updatedPlayers = updatePlayerScore currentPlayer totalScore players
-                    used = usedLetters pos dir word board
-                    newTileBag = removeLetters tileBag used
+                    --used = usedLetters pos dir word board
+                    --newTileBag = removeLetters tileBag used
+                    (newPlayers, newTileBag) = replenishTiles currentPlayer word updatedPlayers tileBag
                     newState = gameState {
                         board = newBoard,
-                        players = replenishTiles currentPlayer word updatedPlayers newTileBag,
+                        players = newPlayers,
                         tileBag = newTileBag
                     }
                 putStrLn $ "Puntuación obtenida: " ++ show totalScore
@@ -333,14 +334,15 @@ calculateWordScore (x,y) dir word board =
         in (total + letterValue, wm * wm')
 
 -- 4. Reposición de fichas
-replenishTiles :: Int -> String -> [Player] -> [Char] -> [Player]
+replenishTiles :: Int -> String -> [Player] -> [Char] -> ([Player], [Char])
 replenishTiles playerIndex word players newTiles =
     let current = players !! playerIndex
         remainingTiles = foldl' (\m c -> Map.update (\v -> if v > 1 then Just (v-1) else Nothing) c m) (tiles current) word
         tilesNeeded = 7 - Map.foldr (+) 0 remainingTiles
         (newLetters, remainingBag) = splitAt tilesNeeded newTiles
         updatedTiles = Map.unionWith (+) remainingTiles (Map.fromListWith (+) [(c,1) | c <- newLetters])
-    in updateList playerIndex (current { tiles = updatedTiles }) players
+        updatedPlayers = updateList playerIndex (current { tiles = updatedTiles }) players
+    in (updatedPlayers, remainingBag)
 
 -- 5. Validación completa de palabras cruzadas
 validateCrossWords :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> Trie Bool -> Bool
