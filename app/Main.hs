@@ -9,7 +9,7 @@ import Data.List (sortBy, maximumBy, foldl', nub)
 import Data.Char (toUpper)
 import Data.Ord (comparing)
 import Text.Read (readMaybe)
-import Data.Maybe (isNothing, isJust, mapMaybe, fromMaybe, listToMaybe, catMaybes)
+import Data.Maybe (fromJust, isNothing, isJust, mapMaybe, fromMaybe, listToMaybe, catMaybes)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Trie (Trie)
@@ -18,6 +18,13 @@ import Data.Array (Array, array, (!), bounds, (//), inRange)
 import Data.Function (on)
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict as MapS
+import Control.Monad (forM_)
+import System.Console.ANSI (clearScreen, setCursorPosition)
+
+clearConsole :: IO ()
+clearConsole = do
+  clearScreen
+  setCursorPosition 0 0
 
 -- 1. Estructuras de datos optimizadas
 data Direction = Horizontal | Vertical deriving (Eq, Show, Ord)
@@ -25,7 +32,8 @@ data Player = Player {
     name :: String,
     score :: Int,
     tiles :: Map Char Int,
-    passLastTurn :: Bool  -- Cambio a Map para contar frecuencia O(1)
+    passLastTurn :: Bool,
+    moves :: [(String, Int)]  -- Lista de (palabra, puntos) jugados por el jugador
 } deriving Show
 
 data Casilla = Casilla {
@@ -115,42 +123,11 @@ initializeGame = do
         initialTiles1 = Map.fromListWith (+) [(c, 1) | c <- p1Tiles]
         initialTiles2 = Map.fromListWith (+) [(c, 1) | c <- p2Tiles]
         players = 
-            [ Player { name = "Bot1", score = 0, tiles = initialTiles1, passLastTurn = False }
-            , Player { name = "Bot3", score = 0, tiles = initialTiles2, passLastTurn = False }
+            [ Player { name = "Bot1", score = 0, tiles = initialTiles1, passLastTurn = False, moves = [] }
+            , Player { name = "Bot4", score = 0, tiles = initialTiles2, passLastTurn = False, moves = [] }
             ]
     return $ GameState boardDef players remaining2 0
 
---Visualización del tablero con multiplicadores
-printBoard :: Array (Int, Int) Casilla -> IO ()
-printBoard board = do
-    -- Imprime la cabecera de columnas, cada una en un campo de 5 caracteres.
-    putStrLn ("\n    " ++ concat [showCol i | i <- [0..14]])
-    -- Imprime cada fila con su número (formateado a 2 caracteres) y las casillas
-    mapM_ printRow [0..14]
-  where
-    -- Para números de columna: si es de un dígito se centra en un campo de 5 caracteres,
-    -- si tiene dos dígitos se ajusta también.
-    showCol :: Int -> String
-    showCol n
-      | n < 10    = "  " ++ show n ++ "  "
-      | otherwise = " "  ++ show n ++ "  "
-      
-    printRow :: Int -> IO ()
-    printRow y = do
-        let row = [ board Data.Array.! (x, y) | x <- [0..14] ]
-            rowStr = concatMap showCasilla row
-            rowLabel = if y < 10 then " " ++ show y else show y
-        putStrLn $ rowLabel ++ "  " ++ rowStr
-
-    -- Formatea cada casilla para que ocupe 5 caracteres.
-    -- Si hay letra se muestra centrada; si hay un multiplicador se imprime su código;
-    -- de lo contrario, se muestra un punto.
-    showCasilla :: Casilla -> String
-    showCasilla Casilla{..}
-      | isJust contenido = "  " ++ [fromMaybe ' ' contenido] ++ "  "
-      | multiplicadorPalabra > 1 = " TW  "
-      | multiplicadorLetra > 1   = if multiplicadorLetra == 3 then " TL  " else " DL  "
-      | otherwise = "  .  "
 
 -- Encuentra las palabras cruzadas y devuelve una lista de tríos: (posición, dirección perpendicular, palabra cruzada)
 findCrossWords :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> [((Int, Int), Direction, String)]
@@ -229,27 +206,38 @@ calculateBaseScore brd start dir word = foldl' acc (0, 1) (zip word positions)
         let Casilla { multiplicadorLetra = lm, multiplicadorPalabra = wm' } = brd Data.Array.! pos
         in (total + (Map.findWithDefault 0 chr tileValues * lm), wm * wm')
 
+-- Función que espera a que el usuario presione ENTER
+waitForEnter :: IO ()
+waitForEnter = do
+  putStrLn "Presiona ENTER para continuar..."
+  _ <- getLine
+  return ()
+
 -- 1. Lógica principal del juego
 gameLoop :: GameState -> Trie Bool -> IO ()
 gameLoop gameState@GameState{..} dictionary
     | checkGameEnd gameState = do
+        printBoardWithMoves board players
         putStrLn "¡Juego terminado! Puntuación final:"
         mapM_ (\p -> putStrLn $ name p ++ ": " ++ show (score p)) players
         let winner = maximumBy (comparing score) players
         putStrLn $ "¡Ganador: " ++ name winner ++ "!"
     | otherwise = do
+        clearConsole
         let current@Player{..} = players !! currentPlayer
-        printBoard board
+        printBoardWithMoves board players
         putStrLn $ "\nTurno de: " ++ name
         putStrLn $ "Fichas disponibles: " ++ show (Map.toList tiles)
         
         if take 3 name == "Bot"
             then do
+                waitForEnter
+                clearConsole 
                 case findBestMove gameState dictionary of
                     Just (word, pos, dir, _) -> do
                         putStrLn $ "Bot juega: " ++ word ++ " en " ++ show pos ++ " " ++ show dir
                         handleMove pos dir word gameState dictionary
-                    
+                        
                     Nothing -> do
                         putStrLn "Bot pasa su turno"
                         let updatedPlayers = updateList currentPlayer (current { passLastTurn = True }) players
@@ -259,19 +247,20 @@ gameLoop gameState@GameState{..} dictionary
                 putStrLn "Ingresa tu movimiento (formato: x y H|V palabra) o 'pasar':"
                 hFlush stdout
                 input <- getLine
-                
                 if input == "pasar"
                     then do
                         let updatedPlayers = updateList currentPlayer (current { passLastTurn = True }) players
                             newState = gameState { players = updatedPlayers }
+                        waitForEnter
                         advanceTurn newState dictionary
                     else case parseInput input of
-                        Just ((x,y), dir, word) -> 
-                            handleMove (x,y) dir (map toUpper word) gameState dictionary
+                        Just ((x,y), dir, word) -> do
+                          handleMove (x,y) dir (map toUpper word) gameState dictionary
+                          waitForEnter
                         Nothing -> do
-                            putStrLn "Formato inválido"
-                            gameLoop gameState dictionary
-
+                          putStrLn "Formato inválido"
+                          waitForEnter
+                          gameLoop gameState dictionary
 
 -- 2. Manejo de movimientos con actualización de multiplicadores
 handleMove :: (Int, Int) -> Direction -> String -> GameState -> Trie Bool -> IO ()
@@ -289,15 +278,14 @@ handleMove pos dir word gameState@GameState{..} dictionary = do
                 let newBoard = fst (placeWord pos dir word board)
                     crossWords = findCrossWords pos dir word newBoard
                     mainWordScore = calculateWordScore pos dir word newBoard
-                    crossScores = sum [calculateWordScore start d w newBoard | (start,d,w) <- crossWords]
+                    crossScores = sum [ calculateWordScore start d w newBoard | (start,d,w) <- crossWords ]
                     totalScore = mainWordScore + crossScores
-                    updatedPlayers = updatePlayerScore currentPlayer totalScore players
+                    updatedPlayers = updatePlayerScore currentPlayer totalScore word players
                     (newPlayers, newTileBag) = replenishTiles currentPlayer word updatedPlayers tileBag
-                    newState = gameState {
-                        board = newBoard,
-                        players = newPlayers,
-                        tileBag = newTileBag
-                    }
+                    newState = gameState { board = newBoard
+                                         , players = newPlayers
+                                         , tileBag = newTileBag
+                                         }
                 putStrLn $ "Puntuación obtenida: " ++ show totalScore
                 advanceTurn newState dictionary
 
@@ -388,13 +376,15 @@ isValidMove pos dir word GameState{..} =
     let positions = wordPositions pos dir word board
     in all (\p -> contenido (board Data.Array.! p) == Nothing) positions
 
-updatePlayerScore :: Int -> Int -> [Player] -> [Player]
-updatePlayerScore idx points players =
+-- Actualiza el puntaje y registra la jugada (palabra y puntos obtenidos)
+updatePlayerScore :: Int -> Int -> String -> [Player] -> [Player]
+updatePlayerScore idx points playedWord players =
   updateList idx updatedPlayer players
   where
     player = players !! idx
     updatedPlayer = player { score = score player + points
-                           , passLastTurn = False  -- Restablece este flag al jugar
+                           , moves = moves player ++ [(playedWord, points)]
+                           , passLastTurn = False
                            }
 
 calculateCrossWordScore :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> Int
@@ -446,3 +436,43 @@ hasTiles player word =
         (nub word)
 
 
+-- Esta función imprime el tablero (que es un Array) y, a la derecha,
+-- una tabla con dos filas (una por jugador) mostrando el nombre y las jugadas.
+printBoardWithMoves :: Array (Int, Int) Casilla -> [Player] -> IO ()
+printBoardWithMoves board players = do
+  -- Imprime el tablero
+  putStrLn $ "\n    " ++ concat [showCol i | i <- [0..boardSize-1]]
+  forM_ [0..boardSize-1] $ \r -> do
+    let row = [ board ! (x, r) | x <- [0..boardSize-1] ]
+        rowStr = (if r < 10 then " " ++ show r else show r) ++ "  " ++ concatMap showCasilla row
+    putStrLn rowStr
+
+  -- Imprime las jugadas en dos columnas
+  putStrLn "\nJugadas:"
+  let player1 = case players of
+                 (p:_) -> p
+                 []    -> error "No hay jugador 1"
+      player2 = if length players > 1 then players !! 1 else error "No hay jugador 2"
+      movesStr p = [ w ++ "(" ++ show pts ++ ")" | (w, pts) <- moves p ]
+      moves1 = movesStr player1
+      moves2 = movesStr player2
+      nrows = max (length moves1) (length moves2)
+      padded1 = moves1 ++ replicate (nrows - length moves1) ""
+      padded2 = moves2 ++ replicate (nrows - length moves2) ""
+      colWidth = 30
+  putStrLn $ (name player1) ++ replicate (colWidth - length (name player1)) ' ' ++ (name player2)
+  forM_ (zip padded1 padded2) $ \(l1, l2) -> do
+    let s1 = l1 ++ replicate (colWidth - length l1) ' '
+    putStrLn $ s1 ++ l2
+  where
+    showCol :: Int -> String
+    showCol n
+      | n < 10    = "  " ++ show n ++ "  "
+      | otherwise = " "  ++ show n ++ "  "
+    
+    showCasilla :: Casilla -> String
+    showCasilla Casilla{..}
+      | isJust contenido = "  " ++ [fromJust contenido] ++ "  "
+      | multiplicadorPalabra > 1 = " TW  "
+      | multiplicadorLetra > 1   = if multiplicadorLetra == 3 then " TL  " else " DL  "
+      | otherwise = "  .  "

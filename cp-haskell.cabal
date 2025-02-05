@@ -34,7 +34,8 @@ library
       src
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
-      array
+      ansi-terminal >=0.11.3.1
+    , array
     , base >=4.7 && <5
     , bytestring
     , bytestring-trie
@@ -52,7 +53,8 @@ executable cp-haskell-exe
       app
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      array
+      ansi-terminal >=0.11.3.1
+    , array
     , base >=4.7 && <5
     , bytestring
     , bytestring-trie
@@ -72,7 +74,8 @@ test-suite cp-haskell-test
       test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      array
+      ansi-terminal >=0.11.3.1
+    , array
     , base >=4.7 && <5
     , bytestring
     , bytestring-trie
