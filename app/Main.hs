@@ -4,18 +4,17 @@
 module Main (main) where
 
 import System.IO (hFlush, stdout)
-import System.Random (randomRIO, newStdGen)
-import Data.List (transpose, intersperse, find, sortBy, maximumBy, foldl', nub)
+import System.Random (randomRIO)
+import Data.List (sortBy, maximumBy, foldl', nub)
 import Data.Char (toUpper)
-import Control.Monad (replicateM, unless)
 import Data.Ord (comparing)
 import Text.Read (readMaybe)
 import Data.Maybe (isNothing, isJust, mapMaybe, fromMaybe, listToMaybe, catMaybes)
-import Data.Map (Map, fromList, (!), member, findWithDefault)
+import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Trie (Trie, fromList, submap, lookup, empty)
+import Data.Trie (Trie)
 import qualified Data.Trie as T
-import Data.Array (Array, array, (!), bounds, indices, (//), inRange)
+import Data.Array (Array, array, (!), bounds, (//), inRange)
 import Data.Function (on)
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict as MapS
@@ -108,6 +107,7 @@ initializeGame = do
     let boardDef = array ((0,0), (14,14)) 
                      [((i,j), Casilla Nothing (fst mult) (snd mult)) 
                       | i <- [0..14], j <- [0..14], let mult = initialMultipliers (i,j)]
+
         bag = concatMap (\(c, n) -> replicate n c) tileDistribution
     shuffledBag <- shuffle bag
     let (p1Tiles, remaining1) = splitAt 7 shuffledBag
@@ -116,7 +116,7 @@ initializeGame = do
         initialTiles2 = Map.fromListWith (+) [(c, 1) | c <- p2Tiles]
         players = 
             [ Player { name = "Bot1", score = 0, tiles = initialTiles1, passLastTurn = False }
-            , Player { name = "Bot2", score = 0, tiles = initialTiles2, passLastTurn = False }
+            , Player { name = "Bot3", score = 0, tiles = initialTiles2, passLastTurn = False }
             ]
     return $ GameState boardDef players remaining2 0
 
@@ -151,14 +151,6 @@ printBoard board = do
       | multiplicadorPalabra > 1 = " TW  "
       | multiplicadorLetra > 1   = if multiplicadorLetra == 3 then " TL  " else " DL  "
       | otherwise = "  .  "
-
---Validación mejorada de la primera jugada
-isValidFirstMove :: String -> [(Int, Int)] -> Bool
-isValidFirstMove word positions = 
-    length word >= 2 && centerPos `elem` positions
-
-
-
 
 -- Encuentra las palabras cruzadas y devuelve una lista de tríos: (posición, dirección perpendicular, palabra cruzada)
 findCrossWords :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> [((Int, Int), Direction, String)]
@@ -212,7 +204,7 @@ findBestMove gameState@GameState{..} dictTrie =
 
 -- 4. Evaluación de posiciones con heurísticas
 evaluatePosition :: GameState -> String -> ((Int, Int), Direction) -> (String, (Int, Int), Direction, Int)
-evaluatePosition GameState{ board = brd, .. } word (pos, dir) = 
+evaluatePosition GameState{ board = brd } word (pos, dir) = 
     (word, pos, dir, baseScore * wordMult + crossWordsBonus + centerBonus)
   where
     (baseScore, wordMult) = calculateBaseScore brd pos dir word
@@ -287,6 +279,17 @@ gameLoop gameState@GameState{..} dictionary
                             putStrLn "Formato inválido"
                             gameLoop gameState dictionary
 
+
+removeLetters :: Eq a => [a] -> [a] -> [a]
+removeLetters bag []     = bag
+removeLetters bag (x:xs) = removeLetters (removeOne x bag) xs
+  where
+    removeOne _ [] = []
+    removeOne y (z:zs)
+      | y == z    = zs
+      | otherwise = z : removeOne y zs
+
+
 -- 2. Manejo de movimientos con actualización de multiplicadores
 handleMove :: (Int, Int) -> Direction -> String -> GameState -> Trie Bool -> IO ()
 handleMove pos dir word gameState@GameState{..} dictionary = do
@@ -300,25 +303,21 @@ handleMove pos dir word gameState@GameState{..} dictionary = do
                 putStrLn "Movimiento inválido"
                 gameLoop gameState dictionary
             else do
-                let (newBoard, usedMultipliers) = placeWord pos dir word board
+                let newBoard = fst (placeWord pos dir word board)
                     crossWords = findCrossWords pos dir word newBoard
                     mainWordScore = calculateWordScore pos dir word newBoard
                     crossScores = sum [calculateWordScore start d w newBoard | (start,d,w) <- crossWords]
                     totalScore = mainWordScore + crossScores
                     updatedPlayers = updatePlayerScore currentPlayer totalScore players
-                    newTileBag = tileBag ++ usedLetters pos dir word board
+                    used = usedLetters pos dir word board
+                    newTileBag = removeLetters tileBag used
                     newState = gameState {
                         board = newBoard,
                         players = replenishTiles currentPlayer word updatedPlayers newTileBag,
-                        tileBag = drop (length word) newTileBag
+                        tileBag = newTileBag
                     }
                 putStrLn $ "Puntuación obtenida: " ++ show totalScore
-                -- gameLoop newState dictionary
                 advanceTurn newState dictionary
-  where
-    hasTiles player word = 
-        all (\c -> Map.findWithDefault 0 c (tiles player) >= length (filter (==c) word)) 
-            (nub word)
 
 -- 3. Cálculo de puntuación con multiplicadores
 calculateWordScore :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> Int
@@ -416,6 +415,8 @@ advanceTurn :: GameState -> Trie Bool -> IO ()
 advanceTurn gameState@GameState{..} dictionary = 
     gameLoop gameState{currentPlayer = (currentPlayer + 1) `mod` length players} dictionary
 
+
+
 -- Función checkGameEnd
 checkGameEnd :: GameState -> Bool
 checkGameEnd GameState{..} = 
@@ -500,5 +501,10 @@ extractCrossWord pos dir board = reverse left ++ middle ++ right
 
 isValidIndex :: (Int, Int) -> Array (Int, Int) a -> Bool
 isValidIndex pos arr = inRange (bounds arr) pos
+
+hasTiles :: Player -> String -> Bool
+hasTiles player word =
+    all (\c -> Map.findWithDefault 0 c (tiles player) >= length (filter (== c) word))
+        (nub word)
 
 
