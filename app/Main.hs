@@ -229,13 +229,6 @@ calculateBaseScore brd start dir word = foldl' acc (0, 1) (zip word positions)
         let Casilla { multiplicadorLetra = lm, multiplicadorPalabra = wm' } = brd Data.Array.! pos
         in (total + (Map.findWithDefault 0 chr tileValues * lm), wm * wm')
 
-usedLetters :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> [Char]
-usedLetters pos dir word board =
-    [ c 
-    | (c, p) <- zip word (wordPositions pos dir word board)
-    , isNothing (contenido (board Data.Array.! p))
-    ]
-
 -- 1. Lógica principal del juego
 gameLoop :: GameState -> Trie Bool -> IO ()
 gameLoop gameState@GameState{..} dictionary
@@ -280,16 +273,6 @@ gameLoop gameState@GameState{..} dictionary
                             gameLoop gameState dictionary
 
 
-removeLetters :: Eq a => [a] -> [a] -> [a]
-removeLetters bag []     = bag
-removeLetters bag (x:xs) = removeLetters (removeOne x bag) xs
-  where
-    removeOne _ [] = []
-    removeOne y (z:zs)
-      | y == z    = zs
-      | otherwise = z : removeOne y zs
-
-
 -- 2. Manejo de movimientos con actualización de multiplicadores
 handleMove :: (Int, Int) -> Direction -> String -> GameState -> Trie Bool -> IO ()
 handleMove pos dir word gameState@GameState{..} dictionary = do
@@ -309,8 +292,6 @@ handleMove pos dir word gameState@GameState{..} dictionary = do
                     crossScores = sum [calculateWordScore start d w newBoard | (start,d,w) <- crossWords]
                     totalScore = mainWordScore + crossScores
                     updatedPlayers = updatePlayerScore currentPlayer totalScore players
-                    --used = usedLetters pos dir word board
-                    --newTileBag = removeLetters tileBag used
                     (newPlayers, newTileBag) = replenishTiles currentPlayer word updatedPlayers tileBag
                     newState = gameState {
                         board = newBoard,
@@ -344,16 +325,6 @@ replenishTiles playerIndex word players newTiles =
         updatedPlayers = updateList playerIndex (current { tiles = updatedTiles }) players
     in (updatedPlayers, remainingBag)
 
--- 5. Validación completa de palabras cruzadas
-validateCrossWords :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> Trie Bool -> Bool
-validateCrossWords start dir word board trie =
-    all isValidCrossWord (findCrossWords start dir word board)
-  where
-    isValidCrossWord (crossStart, crossDir, crossWord) =
-      case crossDir of
-        Horizontal -> T.member (C8.pack crossWord) trie
-        Vertical   -> T.member (C8.pack crossWord) trie
-
 -- Función auxiliar para actualizar multiplicadores
 placeWord :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla 
           -> (Array (Int, Int) Casilla, [Char])
@@ -363,37 +334,6 @@ placeWord (x,y) dir word board =
     positions = wordPositions (x,y) dir word board
     letters = zip word positions
     updates = [ (pos, Casilla (Just c) 1 1) | (c, pos) <- letters ]
-
-findCrossWord :: Array (Int, Int) Casilla -> (Int, Int) -> [((Int, Int), Direction, String)]
-findCrossWord board (x,y) =
-    [ (verticalStart, Vertical, verticalWord) | not (null verticalWord) ] ++
-    [ (horizontalStart, Horizontal, horizontalWord) | not (null horizontalWord) ]
-  where
-    verticalWord = getVerticalWord board (x,y)
-    horizontalWord = getHorizontalWord board (x,y)
-    verticalStart = (x, findStart Vertical (x,y) board)
-    horizontalStart = (findStart Horizontal (x,y) board, y)
-
-getVerticalWord :: Array (Int, Int) Casilla -> (Int, Int) -> String
-getVerticalWord board (x,y) =
-    reverse (getLettersUp board (x,y)) ++ getLettersDown board (x,y)
-
-getHorizontalWord :: Array (Int, Int) Casilla -> (Int, Int) -> String
-getHorizontalWord board (x,y) =
-    reverse (getLettersLeft board (x,y)) ++ getLettersRight board (x,y)
-
-findStart :: Direction -> (Int, Int) -> Array (Int, Int) Casilla -> Int
-findStart dir (x,y) board = case dir of
-    Vertical -> last [yy | yy <- [0..y], isJust (contenido (board Data.Array.! (x,yy)))]
-    Horizontal -> last [xx | xx <- [0..x], isJust (contenido (board Data.Array.! (xx,y)))]
-
--- Funciones auxiliares para obtener letras en todas direcciones
-getLettersUp, getLettersDown, getLettersLeft, getLettersRight 
-    :: Array (Int, Int) Casilla -> (Int, Int) -> String
-getLettersUp board (x,y) = [ c | yy <- [y-1, y-2 .. 0], let c = getLetter board (x,yy), c /= ' ' ]
-getLettersDown board (x,y) = [ c | yy <- [y..14], let c = getLetter board (x,yy), c /= ' ' ]
-getLettersLeft board (x,y) = [ c | xx <- [x-1, x-2 .. 0], let c = getLetter board (xx,y), c /= ' ' ]
-getLettersRight board (x,y) = [ c | xx <- [x..14], let c = getLetter board (xx,y), c /= ' ' ]
 
 -- Función parseInput que faltaba
 parseInput :: String -> Maybe ((Int, Int), Direction, String)
@@ -429,20 +369,19 @@ getPassLastTurn players = [x | Player{ passLastTurn = x } <- players]
 
 
 
-getValidPositions :: GameState -> String -> [((Int, Int), Direction)]
-getValidPositions gameState@GameState{ board = brd } word =
-    [ ((x,y), dir)
-    | x <- [0 .. boardSize - 1]
-    , y <- [0 .. boardSize - 1]
-    , dir <- [Horizontal, Vertical]
-    , fits (x,y) dir (length word)
-    , all (isEmpty brd) (wordPositions (x,y) dir word brd)
-    ]
+getValidPositions :: GameState -> String -> [((Int,Int),Direction)]
+getValidPositions GameState{ board = brd } word =
+  [ ((x, y), dir)
+  | x <- [0 .. boardSize - 1]
+  , y <- [0 .. boardSize - 1]
+  , dir <- [Horizontal, Vertical]
+  , fits (x, y) dir (length word)
+  , all isEmpty (wordPositions (x, y) dir word brd)
+  ]
   where
-    fits (x,y) Horizontal l = x + l <= boardSize
-    fits (x,y) Vertical   l = y + l <= boardSize
-
-    isEmpty brd pos = isNothing (contenido (brd Data.Array.! pos))
+    fits (x, _) Horizontal l = x + l <= boardSize
+    fits (_, y) Vertical   l = y + l <= boardSize
+    isEmpty pos = isNothing (contenido (brd Data.Array.! pos))
 
 isValidMove :: (Int, Int) -> Direction -> String -> GameState -> Bool
 isValidMove pos dir word GameState{..} =
@@ -460,9 +399,6 @@ updatePlayerScore idx points players =
 
 calculateCrossWordScore :: (Int, Int) -> Direction -> String -> Array (Int, Int) Casilla -> Int
 calculateCrossWordScore pos dir word board = calculateWordScore pos dir word board
-
-getLetter :: Array (Int, Int) Casilla -> (Int, Int) -> Char
-getLetter board pos = maybe ' ' id (contenido (board Data.Array.! pos))
 
 
 main :: IO ()
@@ -486,7 +422,7 @@ perpDirection Vertical   = Horizontal
 extractCrossWord :: (Int, Int) -> Direction -> Array (Int, Int) Casilla -> String
 extractCrossWord pos dir board = reverse left ++ middle ++ right
   where
-    left  = takeWhile (/= ' ') $ tail $ map letterAt $ iterate (moveNeg dir) pos
+    left  = takeWhile (/= ' ') $ drop 1 $ map letterAt $ iterate (moveNeg dir) pos
     middle = case if isValidIndex pos board then contenido (board Data.Array.! pos) else Nothing of
                Just c -> [c]
                Nothing -> " "
